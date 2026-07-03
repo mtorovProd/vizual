@@ -9,8 +9,8 @@ import math
 class ManipulatorVisualizer:
     def __init__(self, root):
         self.root = root
-        self.root.title("🤖 Манипулятор (6 DOF) - Прямая кинематика")
-        self.root.geometry("1500x900")
+        self.root.title("🤖 Манипулятор (6 DOF) - Прямая и обратная кинематика")
+        self.root.geometry("1500x950")
         
         # Текущие углы и состояние анимации
         self.current_angles = [0.0] * 6
@@ -30,9 +30,6 @@ class ManipulatorVisualizer:
         # Инициализация
         self.reset_joints()
         self.update_visualization()
-        
-        # Отладка
-        print(f"[DEBUG] Создано angle_entries: {len(self.angle_entries)}")
     
     def create_params_panel(self, parent):
         """Левая панель с параметрами"""
@@ -56,6 +53,38 @@ class ManipulatorVisualizer:
         
         canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
         canvas.configure(yscrollcommand=scrollbar.set)
+        
+        # === ОБРАТНАЯ КИНЕМАТИКА (Плоскость YZ) ===
+        ik_frame = tk.LabelFrame(scrollable_frame, text="🎯 Обратная кинематика (плоскость YZ)", 
+                                 padx=10, pady=10, bg="#fff3e0")
+        ik_frame.pack(padx=10, pady=5, fill="x")
+        
+        tk.Label(ik_frame, text="Целевая точка:", font=("Arial", 10, "bold"), 
+                 bg="#fff3e0").grid(row=0, column=0, padx=5, pady=5, sticky="w")
+        
+        tk.Label(ik_frame, text="Y:", bg="#fff3e0").grid(row=0, column=1, padx=5, pady=5)
+        self.ik_y_entry = tk.Entry(ik_frame, width=10)
+        self.ik_y_entry.grid(row=0, column=2, padx=5, pady=5)
+        self.ik_y_entry.insert(0, "300")
+        
+        tk.Label(ik_frame, text="Z:", bg="#fff3e0").grid(row=0, column=3, padx=5, pady=5)
+        self.ik_z_entry = tk.Entry(ik_frame, width=10)
+        self.ik_z_entry.grid(row=0, column=4, padx=5, pady=5)
+        self.ik_z_entry.insert(0, "400")
+        
+        tk.Label(ik_frame, text="Конфигурация:", bg="#fff3e0").grid(row=1, column=0, padx=5, pady=5, sticky="w")
+        self.ik_config_var = tk.StringVar(value="elbow_up")
+        elbow_up_rb = tk.Radiobutton(ik_frame, text="Локоть вверх", variable=self.ik_config_var, 
+                                     value="elbow_up", bg="#fff3e0")
+        elbow_up_rb.grid(row=1, column=1, columnspan=2, padx=5, pady=5, sticky="w")
+        
+        elbow_down_rb = tk.Radiobutton(ik_frame, text="Локоть вниз", variable=self.ik_config_var, 
+                                       value="elbow_down", bg="#fff3e0")
+        elbow_down_rb.grid(row=1, column=3, columnspan=2, padx=5, pady=5, sticky="w")
+        
+        ik_btn = tk.Button(ik_frame, text="🎯 Рассчитать IK", command=self.calculate_inverse_kinematics,
+                          bg="#ff9800", fg="white", font=("Arial", 10, "bold"), padx=10, pady=5)
+        ik_btn.grid(row=2, column=0, columnspan=5, pady=10, sticky="ew")
         
         # === УГЛЫ СУСТАВОВ (2 строки по 3) ===
         angles_frame = tk.LabelFrame(scrollable_frame, text="📐 Углы суставов (градусы)", 
@@ -243,17 +272,89 @@ class ManipulatorVisualizer:
         self.canvas = FigureCanvasTkAgg(self.fig, master=right_frame)
         self.canvas.get_tk_widget().pack(fill="both", expand=True)
     
+    def calculate_inverse_kinematics(self):
+        """Расчет обратной кинематики для плоскости YZ"""
+        try:
+            target_y = float(self.ik_y_entry.get())
+            target_z = float(self.ik_z_entry.get())
+            config = self.ik_config_var.get()
+            
+            # Получаем DH параметры
+            dh_params = {
+                'a': [float(entry.get()) for entry in self.dh_a_entries],
+                'd': [float(entry.get()) for entry in self.dh_d_entries],
+                'alpha': [float(entry.get()) for entry in self.dh_alpha_entries],
+                'theta': [float(entry.get()) for entry in self.dh_theta_entries]
+            }
+            
+            # Для плоскости YZ используем геометрический подход
+            # J1 = 0 (работаем в плоскости YZ)
+            # J2 и J3 вычисляются геометрически
+            
+            d1 = dh_params['d'][0]  # Высота первого сустава
+            a2 = dh_params['a'][1]  # Длина второго звена
+            a3 = dh_params['a'][2]  # Длина третьего звена
+            d4 = dh_params['d'][3]  # Смещение четвертого сустава
+            
+            # Целевая точка относительно основания
+            y_target = target_y
+            z_target = target_z - d1
+            
+            # Расстояние до цели
+            r = math.sqrt(y_target**2 + z_target**2)
+            
+            # Проверка достижимости
+            max_reach = a2 + a3
+            min_reach = abs(a2 - a3)
+            
+            if r > max_reach:
+                messagebox.showerror("Ошибка", f"Точка недостижима! Максимальная досягаемость: {max_reach:.2f} мм")
+                return
+            
+            if r < min_reach:
+                messagebox.showerror("Ошибка", f"Точка слишком близко! Минимальная досягаемость: {min_reach:.2f} мм")
+                return
+            
+            # Угол J3 (по теореме косинусов)
+            cos_J3 = (a2**2 + a3**2 - r**2) / (2 * a2 * a3)
+            cos_J3 = max(-1.0, min(1.0, cos_J3))  # Ограничение диапазона
+            
+            if config == "elbow_up":
+                J3 = math.acos(cos_J3)
+            else:  # elbow_down
+                J3 = -math.acos(cos_J3)
+            
+            # Угол J2
+            alpha = math.atan2(z_target, y_target)
+            beta = math.atan2(a3 * math.sin(J3), a2 + a3 * math.cos(J3))
+            J2 = alpha - beta
+            
+            # Преобразуем в градусы и учитываем theta offset
+            J2_deg = math.degrees(J2) - dh_params['theta'][1]
+            J3_deg = math.degrees(J3) - dh_params['theta'][2]
+            
+            # Обновляем углы
+            new_angles = [0.0, J2_deg, J3_deg, 0.0, 0.0, 0.0]
+            
+            # Обновляем поля ввода
+            for i, entry in enumerate(self.angle_entries):
+                entry.delete(0, tk.END)
+                entry.insert(0, f"{new_angles[i]:.2f}")
+            
+            self.current_angles = new_angles
+            self.update_visualization()
+            
+            messagebox.showinfo("Успех", f"Обратная кинематика рассчитана!\nJ2: {J2_deg:.2f}°, J3: {J3_deg:.2f}°")
+            
+        except ValueError as e:
+            messagebox.showerror("Ошибка", f"Неверный формат данных: {e}")
+        except Exception as e:
+            messagebox.showerror("Ошибка", f"Произошла ошибка: {e}")
+    
     def get_params(self):
         """Получить все параметры из полей ввода"""
         try:
-            # Отладка: проверка количества entry
-            if len(self.angle_entries) != 6:
-                print(f"[ERROR] angle_entries содержит {len(self.angle_entries)} элементов вместо 6")
-                messagebox.showerror("Ошибка", f"Внутренняя ошибка: angle_entries = {len(self.angle_entries)}")
-                return None
-            
             angles = [float(entry.get()) for entry in self.angle_entries]
-            print(f"[DEBUG] Углы: {angles}")
             
             dh_params = {
                 'a': [float(entry.get()) for entry in self.dh_a_entries],
@@ -261,25 +362,17 @@ class ManipulatorVisualizer:
                 'alpha': [float(entry.get()) for entry in self.dh_alpha_entries],
                 'theta': [float(entry.get()) for entry in self.dh_theta_entries]
             }
-            print(f"[DEBUG] DH параметры: a={dh_params['a']}, d={dh_params['d']}, alpha={dh_params['alpha']}, theta={dh_params['theta']}")
             
             wf_params = {label: float(entry.get()) for label, entry in self.wf_entries.items()}
             tf_params = {label: float(entry.get()) for label, entry in self.tf_entries.items()}
-            print(f"[DEBUG] WF: {wf_params}, TF: {tf_params}")
             
             return angles, dh_params, wf_params, tf_params
         except ValueError as e:
-            print(f"[ERROR] ValueError: {e}")
             messagebox.showerror("Ошибка", f"Неверный формат данных: {e}")
-            return None
-        except Exception as e:
-            print(f"[ERROR] Exception: {e}")
-            messagebox.showerror("Ошибка", f"Произошла ошибка: {e}")
             return None
     
     def calculate_forward_kinematics(self, angles, dh_params, wf_params, tf_params):
         """Расчет прямой кинематики"""
-        print(f"[DEBUG] Расчет кинематики с углами: {angles}")
         joints = [(0.0, 0.0, 0.0)]
         
         T = np.eye(4)
@@ -299,7 +392,6 @@ class ManipulatorVisualizer:
             
             T = T @ T_joint
             joints.append((T[0, 3], T[1, 3], T[2, 3]))
-            print(f"[DEBUG] J{i+1} позиция: ({T[0, 3]:.2f}, {T[1, 3]:.2f}, {T[2, 3]:.2f})")
         
         # Work Frame
         wf_T = self.create_transformation_matrix(
@@ -324,8 +416,6 @@ class ManipulatorVisualizer:
         tool_point = np.array([joints[-1][0], joints[-1][1], joints[-1][2], 1])
         tool_transformed = wf_T @ tf_T @ tool_point
         transformed_joints.append((tool_transformed[0], tool_transformed[1], tool_transformed[2]))
-        
-        print(f"[DEBUG] Финальная позиция инструмента: ({tool_transformed[0]:.2f}, {tool_transformed[1]:.2f}, {tool_transformed[2]:.2f})")
         
         return transformed_joints
     
@@ -434,10 +524,8 @@ class ManipulatorVisualizer:
     
     def update_visualization(self):
         """Мгновенное обновление визуализации"""
-        print("[DEBUG] Вызван update_visualization")
         result = self.get_params()
         if result is None:
-            print("[DEBUG] get_params вернул None")
             return
         
         angles, dh_params, wf_params, tf_params = result
@@ -446,7 +534,6 @@ class ManipulatorVisualizer:
         
         self.draw_manipulator(joints)
         self.update_position_labels(joints)
-        print("[DEBUG] update_visualization завершен")
     
     def reset_joints(self):
         """Сброс углов в нулевое положение"""
@@ -457,7 +544,7 @@ class ManipulatorVisualizer:
         self.update_visualization()
     
     def start_animation(self):
-        """Запуск анимации"""
+        """Запуск анимации с интерполяцией углов"""
         if self.animating:
             self.animating = False
             if self.anim_id:
@@ -478,43 +565,40 @@ class ManipulatorVisualizer:
             messagebox.showerror("Ошибка", "Неверный формат данных")
             return
         
-        start_joints = self.calculate_forward_kinematics(
-            self.current_angles, dh_params, wf_params, tf_params
-        )
-        end_joints = self.calculate_forward_kinematics(
-            angles, dh_params, wf_params, tf_params
-        )
-        
+        # Сохраняем начальные и конечные УГЛЫ (не позиции!)
         self.animating = True
         self.start_btn.config(text="⏸ Стоп", bg="#f44336")
         self.current_frame = 0
         self.total_frames = frames
-        self.start_joints = start_joints
-        self.end_joints = end_joints
+        self.start_angles = self.current_angles.copy()
+        self.end_angles = angles
         self.dh_params = dh_params
         self.wf_params = wf_params
         self.tf_params = tf_params
-        self.target_angles = angles
         self.speed = speed
         
         self.animate_step()
     
     def animate_step(self):
-        """Один шаг анимации"""
+        """Один шаг анимации с интерполяцией углов"""
         if not self.animating or self.current_frame >= self.total_frames:
             self.animating = False
             self.start_btn.config(text="▶️ Анимация", bg="#2196F3")
-            self.current_angles = self.target_angles
+            self.current_angles = self.end_angles
             return
         
         t = self.current_frame / (self.total_frames - 1) if self.total_frames > 1 else 1.0
         
-        current_joints = []
-        for i in range(len(self.start_joints)):
-            x = self.start_joints[i][0] + t * (self.end_joints[i][0] - self.start_joints[i][0])
-            y = self.start_joints[i][1] + t * (self.end_joints[i][1] - self.start_joints[i][1])
-            z = self.start_joints[i][2] + t * (self.end_joints[i][2] - self.start_joints[i][2])
-            current_joints.append((x, y, z))
+        # Интерполяция УГЛОВ (не позиций!)
+        current_angles = []
+        for i in range(6):
+            angle = self.start_angles[i] + t * (self.end_angles[i] - self.start_angles[i])
+            current_angles.append(angle)
+        
+        # Пересчитываем прямую кинематику для промежуточных углов
+        current_joints = self.calculate_forward_kinematics(
+            current_angles, self.dh_params, self.wf_params, self.tf_params
+        )
         
         self.draw_manipulator(current_joints)
         self.update_position_labels(current_joints)
